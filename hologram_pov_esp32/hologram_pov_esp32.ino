@@ -212,13 +212,23 @@ bool fetchPOVData() {
   
   HTTPClient http;
   http.begin(SERVER_URL);
-  http.setTimeout(5000);
+  http.setTimeout(10000); // 10 second timeout
   
   Serial.println("Fetching POV data from server...");
+  Serial.print("URL: ");
+  Serial.println(SERVER_URL);
+  
   int httpCode = http.GET();
+  
+  Serial.print("HTTP Response Code: ");
+  Serial.println(httpCode);
   
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
+    
+    Serial.print("Payload size: ");
+    Serial.print(payload.length());
+    Serial.println(" bytes");
     
     // Parse JSON
     DynamicJsonDocument doc(65536); // 64KB buffer
@@ -227,6 +237,8 @@ bool fetchPOVData() {
     if (error) {
       Serial.print("✗ JSON parsing failed: ");
       Serial.println(error.c_str());
+      Serial.println("First 200 chars of payload:");
+      Serial.println(payload.substring(0, 200));
       http.end();
       return false;
     }
@@ -234,58 +246,121 @@ bool fetchPOVData() {
     // Clear existing data
     currentFrame.clear();
     
+    // Check if we have the expected structure
+    if (!doc.containsKey("config") || !doc.containsKey("frames")) {
+      Serial.println("✗ Invalid JSON structure. Missing 'config' or 'frames'");
+      Serial.println("JSON keys found:");
+      JsonObject root = doc.as<JsonObject>();
+      for (JsonPair kv : root) {
+        Serial.print("  - ");
+        Serial.println(kv.key().c_str());
+      }
+      http.end();
+      return false;
+    }
+    
     // Extract configuration
     JsonObject config = doc["config"];
     int motorRPM = config["motorRPM"] | MOTOR_RPM;
-    microsecondsPerSlice = config["microsecondsPerRotation"] | ROTATION_TIME_US;
+    unsigned long rotationTimeUs = config["microsecondsPerRotation"] | ROTATION_TIME_US;
+    
+    Serial.println("Config loaded:");
+    Serial.print("  Motor RPM: ");
+    Serial.println(motorRPM);
+    Serial.print("  Rotation time (us): ");
+    Serial.println(rotationTimeUs);
     
     // Extract frame data
     JsonArray frames = doc["frames"];
-    if (frames.size() > 0) {
-      JsonObject frame = frames[0]; // Use first frame for now
-      totalSlices = frame["sliceCount"] | 0;
-      degreesPerSlice = 360.0 / totalSlices;
-      microsecondsPerSlice = ROTATION_TIME_US / totalSlices;
+    if (frames.size() == 0) {
+      Serial.println("✗ No frames found in data");
+      http.end();
+      return false;
+    }
+    
+    Serial.print("Found ");
+    Serial.print(frames.size());
+    Serial.println(" frame(s)");
+    
+    // Use first frame
+    JsonObject frame = frames[0];
+    totalSlices = frame["sliceCount"] | 0;
+    
+    if (totalSlices == 0) {
+      Serial.println("✗ No slices found in frame");
+      http.end();
+      return false;
+    }
+    
+    degreesPerSlice = 360.0 / totalSlices;
+    microsecondsPerSlice = rotationTimeUs / totalSlices;
+    
+    Serial.print("Processing ");
+    Serial.print(totalSlices);
+    Serial.println(" slices...");
+    
+    JsonArray slices = frame["slices"];
+    int sliceCount = 0;
+    
+    for (JsonObject slice : slices) {
+      POVSlice povSlice;
+      povSlice.angle = slice["angle"] | 0.0;
       
-      JsonArray slices = frame["slices"];
+      JsonArray leds = slice["leds"];
+      int ledIndex = 0;
       
-      for (JsonObject slice : slices) {
-        POVSlice povSlice;
-        povSlice.angle = slice["angle"] | 0.0;
-        
-        JsonArray leds = slice["leds"];
-        int ledIndex = 0;
-        for (JsonObject led : leds) {
-          if (ledIndex < NUM_LEDS) {
-            povSlice.colors[ledIndex] = CRGB(
-              led["r"] | 0,
-              led["g"] | 0,
-              led["b"] | 0
-            );
-            ledIndex++;
-          }
+      for (JsonObject led : leds) {
+        if (ledIndex < NUM_LEDS) {
+          int r = led["r"] | 0;
+          int g = led["g"] | 0;
+          int b = led["b"] | 0;
+          povSlice.colors[ledIndex] = CRGB(r, g, b);
+          ledIndex++;
         }
-        
-        currentFrame.push_back(povSlice);
       }
       
-      Serial.println("✓ POV data loaded successfully!");
-      Serial.print("  Total slices: ");
-      Serial.println(totalSlices);
-      Serial.print("  Degrees per slice: ");
-      Serial.println(degreesPerSlice);
-      Serial.print("  Microseconds per slice: ");
-      Serial.println(microsecondsPerSlice);
+      // Fill remaining LEDs with black if needed
+      while (ledIndex < NUM_LEDS) {
+        povSlice.colors[ledIndex] = CRGB(0, 0, 0);
+        ledIndex++;
+      }
       
-      http.end();
-      return true;
+      currentFrame.push_back(povSlice);
+      sliceCount++;
+      
+      // Print progress every 20 slices
+      if (sliceCount % 20 == 0) {
+        Serial.print("  Loaded ");
+        Serial.print(sliceCount);
+        Serial.print("/");
+        Serial.println(totalSlices);
+      }
     }
+    
+    Serial.println("✓ POV data loaded successfully!");
+    Serial.print("  Total slices: ");
+    Serial.println(totalSlices);
+    Serial.print("  Degrees per slice: ");
+    Serial.println(degreesPerSlice, 2);
+    Serial.print("  Microseconds per slice: ");
+    Serial.println(microsecondsPerSlice);
+    Serial.print("  Memory used: ~");
+    Serial.print((totalSlices * NUM_LEDS * 3) / 1024);
+    Serial.println(" KB");
+    
+    http.end();
+    return true;
+    
+  } else if (httpCode == 404) {
+    Serial.println("✗ No images found on server (404)");
+    Serial.println("  Upload an image from the mobile app first!");
+  } else if (httpCode == -1) {
+    Serial.println("✗ Connection failed");
+    Serial.println("  Check if server is running and URL is correct.");
+    Serial.println("  Verify ESP32 and server are on same network.");
   } else {
     Serial.print("✗ HTTP request failed. Code: ");
     Serial.println(httpCode);
-    if (httpCode == -1) {
-      Serial.println("  Check if server is running and URL is correct.");
-    }
   }
   
   http.end();

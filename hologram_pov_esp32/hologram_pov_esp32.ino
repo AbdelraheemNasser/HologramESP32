@@ -27,15 +27,15 @@
 // CHANGE THESE VALUES!
 
 // WiFi Credentials
-const char* WIFI_SSID = "YOUR_WIFI_SSID";           // Change this!
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";   // Change this!
+const char* WIFI_SSID = "Hamo";           // Change this!
+const char* WIFI_PASSWORD = "123456789";   // Change this!
 
 // Server Configuration
-const char* SERVER_URL = "http://192.168.1.100:3000/api/latest";  // Change to your server IP!
+const char* SERVER_URL = "http://192.168.234.97:3000/api/esp32/latest";  // ESP32-friendly minimal endpoint!
 
 // LED Configuration
 #define LED_PIN 5              // GPIO pin for WS2812B data
-#define NUM_LEDS 60            // Number of LEDs
+#define NUM_LEDS 50            // Number of LEDs (changed from 60 to 50)
 #define LED_TYPE WS2812B
 #define COLOR_ORDER GRB
 #define BRIGHTNESS 200         // 0-255 (adjust for your environment)
